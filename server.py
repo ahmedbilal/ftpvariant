@@ -3,11 +3,12 @@ import threading
 import os
 
 HOST = '127.0.0.1'
-PORT = 20
+PORT = 24
 
 ADDRESS = (HOST, PORT)
 
 allowed_users = ['anonymous', 'bilal']
+
 
 def abk_sendmsg(sock, msg):
     modded_msg = msg[:256]  # only first 256 chars
@@ -18,6 +19,7 @@ def abk_sendmsg(sock, msg):
     else:
         modded_msg = modded_msg.ljust(256, chr(0)) 
     sock.sendall(modded_msg)
+
 
 def abk_recvmsg(sock):
     length = 256
@@ -31,6 +33,35 @@ def abk_recvmsg(sock):
             return msg
     return msg
 
+
+class FileSenderThread(threading.Thread):
+    def __init__(self, filename, host, port, data_sock, conn):
+        threading.Thread.__init__(self)
+        self.filename = filename
+        self.host = host
+        self.port = port
+        self.data_sock = data_sock
+        self.conn = conn
+
+    def run(self):
+        try:
+            with open(self.filename, 'rb') as output_file:
+                size = os.path.getsize(self.filename)
+
+                with self.data_sock as user_data_sock:
+                    user_data_sock.connect((self.host, self.port))
+                    abk_sendmsg(user_data_sock, ("{}\r\n".format(size)).encode())
+                    for c in output_file.read():
+                        user_data_sock.sendall((c).to_bytes(1, byteorder='big'))
+                    abk_sendmsg(self.conn, b"250 File Succesfully transmitted\r\n")
+        
+        except FileNotFoundError:
+            with self.data_sock as user_data_sock:
+                user_data_sock.connect((self.host, self.port))
+                abk_sendmsg(user_data_sock, b"-1\r\n")
+            abk_sendmsg(self.conn, b"550 File Not Found\r\n")
+
+
 class WorkerThread(threading.Thread):
     def __init__(self, conn, addr):
         threading.Thread.__init__(self)
@@ -43,9 +74,9 @@ class WorkerThread(threading.Thread):
         local_data.user_logged_in = False
         local_data.cwd = os.getcwd()
 
-        local_data.user_data_port = None
+        local_data.user_data_ports = []
         local_data.user_host = None
-        local_data.user_data_sock = None
+        local_data.user_data_socks = []
 
         while True:
             command =  self.conn.recv(1024).decode("utf-8")
@@ -82,20 +113,19 @@ class WorkerThread(threading.Thread):
                 except FileNotFoundError:
                     abk_sendmsg(self.conn, b"550 No Such path exists\r\n")
             elif cmd == 'PORT':
-                address = args[0].split(",")
-                print(args)
-                local_data.user_host = ".".join(address[:-2])
-                local_data.user_data_port = int(address[-2]) * 256 + int(address[-1])
-                local_data.user_data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                print(local_data.user_host, local_data.user_data_port)
+                local_data.user_host = args[0]
+                for port in args[1:]:
+                    local_data.user_data_ports.append(int(port))
+                    local_data.user_data_socks.append(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+                print(local_data.user_host, local_data.user_data_ports)
                 abk_sendmsg(self.conn, b"200 OK\r\n")
 
             elif cmd == 'LIST':
                 ls_output = os.listdir(local_data.cwd)
                 abk_sendmsg(self.conn, b"125 Transfer started\r\n")
                 # print(local_data.user_data_sock)
-                with local_data.user_data_sock as user_data_sock:
-                    user_data_sock.connect((local_data.user_host, local_data.user_data_port))
+                with local_data.user_data_socks.pop() as user_data_sock:
+                    user_data_sock.connect((local_data.user_host, local_data.user_data_ports.pop()))
                     for entry in ls_output:
                         _entry = "{}\r\n".format(entry)
                         abk_sendmsg(user_data_sock, _entry.encode())
@@ -103,20 +133,15 @@ class WorkerThread(threading.Thread):
 
             elif cmd == 'RETR' and args[0]:
                 abk_sendmsg(self.conn, b"125\r\n")
-                try:
-                    with open(args[0], 'rb') as output_file:
-                        size = os.path.getsize(args[0])
-                        abk_sendmsg(self.conn, ("{}\r\n".format(size)).encode())
-    
-                        with local_data.user_data_sock as user_data_sock:
-                            user_data_sock.connect((local_data.user_host, local_data.user_data_port))
-                            for c in output_file.read():
-                                user_data_sock.sendall((c).to_bytes(1, byteorder='big'))
-                            abk_sendmsg(self.conn, b"250 File Succesfully transmitted\r\n")
+                for file in args:
+                    FileSenderThread(filename=file,
+                                     data_sock=local_data.user_data_socks.pop(0),
+                                     host=local_data.user_host,
+                                     port=local_data.user_data_ports.pop(0),
+                                     conn=self.conn
+                                     ).start()
+                    
                 
-                except FileNotFoundError:
-                    abk_sendmsg(self.conn, b"-1\r\n")
-                    abk_sendmsg(self.conn, b"550 File Not Found\r\n")
 
             elif cmd == 'QUIT':
                 local_data.user_logged_in = False
@@ -125,7 +150,6 @@ class WorkerThread(threading.Thread):
                 return
             
             elif cmd == 'SIZE':
-
                 if args and len(args[0]):
                     abk_sendmsg(self.conn, b"125\r\n")
                     try:
