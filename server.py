@@ -115,6 +115,7 @@ class WorkerThread(threading.Thread):
                             abk_sendmsg(self.conn, b"250 File Succesfully transmitted\r\n")
                 
                 except FileNotFoundError:
+                    abk_sendmsg(self.conn, b"-1\r\n")
                     abk_sendmsg(self.conn, b"550 File Not Found\r\n")
 
             elif cmd == 'QUIT':
@@ -133,6 +134,7 @@ class WorkerThread(threading.Thread):
                         abk_sendmsg(self.conn, b"250 File Size Succesfully transmitted\r\n")
 
                     except FileNotFoundError:
+                        abk_sendmsg(self.conn, b"-1\r\n")
                         abk_sendmsg(self.conn, b"550 File Not Found\r\n")
 
 def main():
