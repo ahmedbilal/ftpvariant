@@ -16,8 +16,8 @@ def abk_sendmsg(sock, msg):
         modded_msg = modded_msg.decode()
         modded_msg = modded_msg.ljust(256, chr(0))  # padd with \0 upto 256 len
         modded_msg = modded_msg.encode()
-    else:
-        modded_msg = modded_msg.ljust(256, chr(0)) 
+    elif type(modded_msg) == str: 
+        modded_msg = modded_msg.ljust(256, chr(0))
     sock.sendall(modded_msg)
 
 
@@ -51,8 +51,7 @@ class FileSenderThread(threading.Thread):
                 with self.data_sock as user_data_sock:
                     user_data_sock.connect((self.host, self.port))
                     abk_sendmsg(user_data_sock, ("{}\r\n".format(size)).encode())
-                    for c in output_file.read():
-                        user_data_sock.sendall((c).to_bytes(1, byteorder='big'))
+                    user_data_sock.sendall(output_file.read())
                     abk_sendmsg(self.conn, b"250 File Succesfully transmitted\r\n")
         
         except FileNotFoundError:
