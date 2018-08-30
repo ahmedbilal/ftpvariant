@@ -27,16 +27,19 @@ threads_loc = {}
 _x = 0
 _y = 0
 
+
 def print_there(x, y, text):
-     sys.stdout.write("\x1b7\x1b[%d;%df%s\x1b8" % (x, y, text))
-     sys.stdout.flush()
+    sys.stdout.write("\x1b7\x1b[%d;%df%s\x1b8" % (x, y, text))
+    sys.stdout.flush()
 
 
 def save_cur_pos():
     sys.stdout.write("\x1bs")
 
+
 def rest_cur_pos():
     sys.stdout.write("\x1bu")
+
 
 class ProgressRenderingThread(threading.Thread):
     def __init__(self):
@@ -48,20 +51,22 @@ class ProgressRenderingThread(threading.Thread):
         global _x, _y
         while True:
 
-            tid, filename, progress = MSG_QUEUE.get()
+            tid, filename = MSG_QUEUE.get()
 
             if tid not in threads_loc.keys():
                 _x += 1
                 threads_loc[tid] = (_x, _y)
                 print_there(threads_loc[tid][0], threads_loc[tid][1], filename)
-                threads_loc[tid] = (threads_loc[tid][0], threads_loc[tid][1] + len(filename) + 1)
+                threads_loc[tid] = (threads_loc[tid][0],
+                                    threads_loc[tid][1] + len(filename) + 1)
             else:
-                threads_loc[tid] = (threads_loc[tid][0], threads_loc[tid][1] + 1)
+                threads_loc[tid] = (threads_loc[tid][0],
+                                    threads_loc[tid][1] + 1)
             # print(progress)
             print_there(threads_loc[tid][0], threads_loc[tid][1],
                         fg.li_green + "◼" + fg.rs)
             MSG_QUEUE.task_done()
-            
+
 
 def abk_sendmsg(sock, msg):
     modded_msg = msg[:256]  # only first 256 chars
@@ -69,7 +74,7 @@ def abk_sendmsg(sock, msg):
         modded_msg = modded_msg.decode()
         modded_msg = modded_msg.ljust(256, chr(0))  # padd with \0 upto 256 len
         modded_msg = modded_msg.encode()
-    elif type(modded_msg) == str: 
+    elif type(modded_msg) == str:
         modded_msg = modded_msg.ljust(256, chr(0))
     sock.sendall(modded_msg)
 
@@ -110,7 +115,7 @@ class HandleClientDataThread(threading.Thread):
             s.bind((HOST, self.port))
             s.listen()
 
-            conn, addr = s.accept()
+            conn, _addr = s.accept()
             self.logger.debug("Data Handled Lock Acquired")
 
             if self.is_file_incoming:
@@ -132,7 +137,8 @@ class HandleClientDataThread(threading.Thread):
                     recieved += len(response)
                     progress = int(100 * (recieved / self.file_size))
                     if progress > old_progress:
-                        MSG_QUEUE.put((threading.get_ident(), self.filename, progress))
+                        MSG_QUEUE.put(
+                            (threading.get_ident(), self.filename))
                         old_progress = progress
                     if self.file_size - recieved == 0:
                         f = open("/home/bilal/Desktop/" + self.filename, "wb")
@@ -149,7 +155,7 @@ class HandleClientDataThread(threading.Thread):
             print()
             if not self.is_file_incoming:
                 print(content)
-            
+
             with COUNT_LOCK:
                 count += 1
                 if count == max_count:
@@ -173,7 +179,6 @@ def send_port(s, cmd, host, port):
 
 def main():
     ProgressRenderingThread().start()
-
 
     global count
     global max_count
@@ -214,7 +219,7 @@ def main():
                 well_formed_command = True
 
             elif cmd == 'CWD' and args and len(args) == 1:
-                    well_formed_command = True
+                well_formed_command = True
 
             elif cmd == 'QUIT' and not args:
                 well_formed_command = True
@@ -228,8 +233,9 @@ def main():
             elif cmd == 'RETR' and args:
                 threads = []
                 for filename in args:
-                    threads.append(HandleClientDataThread(is_file_incoming=True,
-                                               filename=filename))
+                    threads.append(HandleClientDataThread(
+                        is_file_incoming=True, filename=filename)
+                    )
                     max_count += 1
                 os.system("clear")
                 for t in threads:
@@ -249,23 +255,25 @@ def main():
                 if cmd == 'QUIT':
                     s.close()
                     return 0
-                elif cmd == 'LIST':
+                elif cmd == 'LIST' and response[:3] != '530':
                     response = abk_recvmsg(s).decode()
                     print(response)
-                elif cmd == 'RETR':
+
+                elif cmd == 'RETR' and response[:3] != '530':
                     COUNT_TO_MAXCOUNT.acquire()
                     main_logger.debug("Waiting for COUNT_TO_MAX")
 
                     COUNT_TO_MAXCOUNT.wait()
-                    
+
                     main_logger.debug("Wait Ended for COUNT_TO_MAX")
-                    for i in range(max_count):
+                    for _i in range(max_count):
                         response = abk_recvmsg(s).decode()
                         print(response)
                     threads_loc.clear()
                     COUNT_TO_MAXCOUNT.release()
-                elif cmd == 'SIZE':
+                elif cmd == 'SIZE' and response[:3] != '530':
                     file_size = abk_recvmsg(s).decode()
                     print("File Size:", file_size)
+
 
 main()
