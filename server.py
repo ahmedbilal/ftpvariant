@@ -1,7 +1,15 @@
+"""
+A primitive FTP (variant) server which supports Active Mode only
+which can download multiple files concurrently.
+"""
+
 import socket
 import threading
 import os
 import sys
+from collections import namedtuple
+
+from utils import abk_sendmsg
 
 HOST = '127.0.0.1'
 
@@ -17,39 +25,21 @@ ADDRESS = (HOST, PORT)
 ALLOWED_USERS = ['anonymous']
 PRIVILEGED_COMMANDS = ['PWD', 'CWD', 'PORT', 'LIST', 'RETR', 'SIZE']
 
-
-def abk_sendmsg(sock, msg):
-    modded_msg = msg[:256]  # only first 256 chars
-    if type(modded_msg) == bytes:
-        modded_msg = modded_msg.decode()
-        modded_msg = modded_msg.ljust(256, chr(0))  # padd with \0 upto 256 len
-        modded_msg = modded_msg.encode()
-    elif type(modded_msg) == str:
-        modded_msg = modded_msg.ljust(256, chr(0))
-    sock.sendall(modded_msg)
-
-
-def abk_recvmsg(sock):
-    length = 256
-    msg = b""
-    while length > 0:
-        received = sock.recv(256)
-        length -= len(received)
-        msg += received
-
-        if len(received) < 256:
-            return msg
-    return msg
+FileRetrRequest = namedtuple(
+    "FileRetrRequest", "filename host port data_sock conn")
 
 
 class FileSenderThread(threading.Thread):
-    def __init__(self, filename, host, port, data_sock, conn):
+    """Thread responsible for sending files
+       which user requested through RETR command."""
+
+    def __init__(self, file_retr_request):
         threading.Thread.__init__(self)
-        self.filename = filename
-        self.host = host
-        self.port = port
-        self.data_sock = data_sock
-        self.conn = conn
+        self.filename = file_retr_request.filename
+        self.host = file_retr_request.host
+        self.port = file_retr_request.port
+        self.data_sock = file_retr_request.data_sock
+        self.conn = file_retr_request.conn
 
     def run(self):
         try:
@@ -72,6 +62,9 @@ class FileSenderThread(threading.Thread):
 
 
 class WorkerThread(threading.Thread):
+    """Thread responsible for getting and running user
+       commands"""
+
     def __init__(self, conn, addr):
         threading.Thread.__init__(self)
 
@@ -157,14 +150,12 @@ class WorkerThread(threading.Thread):
             elif cmd == 'RETR' and args[0]:
                 abk_sendmsg(self.conn, b"125\r\n")
                 for file in args:
-                    FileSenderThread(filename=file,
-                                     data_sock=local_data.user_data_socks.pop(
-                                         0),
-                                     host=local_data.user_host,
-                                     port=local_data.user_data_ports.pop(
-                                         0),
-                                     conn=self.conn
-                                     ).start()
+                    file_retr_request = FileRetrRequest(file,
+                                                        local_data.user_host,
+                                                        local_data.user_data_ports.pop(
+                                                            0), local_data.user_data_socks.pop(0), self.conn)
+
+                    FileSenderThread(file_retr_request).start()
 
             elif cmd == 'QUIT':
                 local_data.user_logged_in = False
@@ -173,7 +164,7 @@ class WorkerThread(threading.Thread):
                 return
 
             elif cmd == 'SIZE':
-                if len(args) > 0 and args[0]:
+                if args and args[0]:
                     abk_sendmsg(self.conn, b"125\r\n")
                     try:
                         size = os.path.getsize(args[0])
@@ -191,6 +182,9 @@ class WorkerThread(threading.Thread):
 
 
 def main():
+    """Listen for connection and as soon as user connects create a WorkerThread
+       to handle user's requests"""
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(ADDRESS)
 
