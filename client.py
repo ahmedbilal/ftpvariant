@@ -1,3 +1,8 @@
+"""
+A primitive FTP (variant) server which supports Active Mode only
+which can download multiple files concurrently.
+"""
+
 import socket
 import threading
 import os
@@ -6,7 +11,11 @@ import logging
 import time
 import sys
 import queue
-from sty import fg, rs
+
+from sty import fg
+
+from utils import abk_recvmsg
+
 
 if len(sys.argv) < 4:
     print("** FTP Variant **")
@@ -26,15 +35,15 @@ PORT = int(sys.argv[2])
 
 ADDRESS = (HOST, PORT)
 
-count = 0
-max_count = 0
+COUNT = 0
+MAX_COUNT = 0
 
 COUNT_LOCK = threading.Lock()
 COUNT_TO_MAXCOUNT = threading.Condition()
 
 
 MSG_QUEUE = queue.Queue()
-threads_loc = {}
+THREADS_LOC = {}
 _x = 0
 _y = 0
 
@@ -58,49 +67,25 @@ class ProgressRenderingThread(threading.Thread):
         self.daemon = True
 
     def run(self):
-        global threads_loc
+        global THREADS_LOC
         global _x, _y
         while True:
 
             tid, filename = MSG_QUEUE.get()
 
-            if tid not in threads_loc.keys():
+            if tid not in THREADS_LOC.keys():
                 _x += 1
-                threads_loc[tid] = (_x, _y)
-                print_there(threads_loc[tid][0], threads_loc[tid][1], filename)
-                threads_loc[tid] = (threads_loc[tid][0],
-                                    threads_loc[tid][1] + len(filename) + 1)
+                THREADS_LOC[tid] = (_x, _y)
+                print_there(THREADS_LOC[tid][0], THREADS_LOC[tid][1], filename)
+                THREADS_LOC[tid] = (THREADS_LOC[tid][0],
+                                    THREADS_LOC[tid][1] + len(filename) + 1)
             else:
-                threads_loc[tid] = (threads_loc[tid][0],
-                                    threads_loc[tid][1] + 1)
+                THREADS_LOC[tid] = (THREADS_LOC[tid][0],
+                                    THREADS_LOC[tid][1] + 1)
             # print(progress)
-            print_there(threads_loc[tid][0], threads_loc[tid][1],
+            print_there(THREADS_LOC[tid][0], THREADS_LOC[tid][1],
                         fg.li_green + "◼" + fg.rs)
             MSG_QUEUE.task_done()
-
-
-def abk_sendmsg(sock, msg):
-    modded_msg = msg[:256]  # only first 256 chars
-    if type(modded_msg) == bytes:
-        modded_msg = modded_msg.decode()
-        modded_msg = modded_msg.ljust(256, chr(0))  # padd with \0 upto 256 len
-        modded_msg = modded_msg.encode()
-    elif type(modded_msg) == str:
-        modded_msg = modded_msg.ljust(256, chr(0))
-    sock.sendall(modded_msg)
-
-
-def abk_recvmsg(sock):
-    length = 256
-    msg = b""
-    while length > 0:
-        received = sock.recv(256)
-        length -= len(received)
-        msg += received
-
-        if len(received) < 256:
-            return msg
-    return msg
 
 
 class HandleClientDataThread(threading.Thread):
@@ -117,8 +102,8 @@ class HandleClientDataThread(threading.Thread):
         self.port = random.randint(10000, 15000)
 
     def run(self):
-        global count
-        global max_count
+        global COUNT
+        global MAX_COUNT
         global COUNT_LOCK
         global COUNT_TO_MAXCOUNT
 
@@ -139,7 +124,7 @@ class HandleClientDataThread(threading.Thread):
             old_progress = 0
             while True:
                 if self.is_file_incoming:
-                    if type(content) == str:
+                    if isinstance(content, str):
                         content = bytes()
                     response = abk_recvmsg(conn)
                     if not response:
@@ -169,8 +154,8 @@ class HandleClientDataThread(threading.Thread):
                 print(content)
 
             with COUNT_LOCK:
-                count += 1
-                if count == max_count:
+                COUNT += 1
+                if COUNT == MAX_COUNT:
                     COUNT_TO_MAXCOUNT.acquire()
                     COUNT_TO_MAXCOUNT.notify_all()
                     COUNT_TO_MAXCOUNT.release()
@@ -192,8 +177,8 @@ def send_port(s, cmd, host, port):
 def main():
     ProgressRenderingThread().start()
 
-    global count
-    global max_count
+    global COUNT
+    global MAX_COUNT
     global COUNT_LOCK
     global COUNT_TO_MAXCOUNT
     main_logger = logging.getLogger("MAIN")
@@ -204,11 +189,11 @@ def main():
         print(fg.li_blue + response + fg.rs)
 
         while True:
-            max_count = 0
-            count = 0
+            MAX_COUNT = 0
+            COUNT = 0
             command = input(fg.green + ">> " + fg.rs)
             command = command.split()
-            if len(command) == 0:
+            if not command:
                 continue
             command[0] = command[0].upper()
             command = " ".join(command)
@@ -237,23 +222,22 @@ def main():
                 well_formed_command = True
 
             elif cmd == 'LIST':
-                t = HandleClientDataThread()
-                t.start()
-                send_port(s, cmd, HOST, t.port)
+                thread = HandleClientDataThread()
+                thread.start()
+                send_port(s, cmd, HOST, thread.port)
                 well_formed_command = True
 
             elif cmd == 'RETR' and args:
                 threads = []
                 for filename in args:
                     threads.append(HandleClientDataThread(
-                        is_file_incoming=True, filename=filename)
-                    )
-                    max_count += 1
+                        is_file_incoming=True, filename=filename))
+                    MAX_COUNT += 1
                 os.system("clear")
-                for t in threads:
-                    t.start()
-                    send_port(s, cmd, HOST, t.port)
-                main_logger.info("Max Count {}".format(max_count))
+                for thread in threads:
+                    thread.start()
+                    send_port(s, cmd, HOST, thread.port)
+                main_logger.info("Max COUNT %d" % MAX_COUNT)
                 well_formed_command = True
 
             elif cmd == 'SIZE' and args and len(args) == 1:
@@ -278,10 +262,10 @@ def main():
                     COUNT_TO_MAXCOUNT.wait()
 
                     main_logger.debug("Wait Ended for COUNT_TO_MAX")
-                    for _i in range(max_count):
+                    for _i in range(MAX_COUNT):
                         response = abk_recvmsg(s).decode()
                         print(response)
-                    threads_loc.clear()
+                    THREADS_LOC.clear()
                     COUNT_TO_MAXCOUNT.release()
                 elif cmd == 'SIZE' and response[:3] != '530':
                     file_size = abk_recvmsg(s).decode()
