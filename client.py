@@ -5,33 +5,78 @@ import random
 import logging
 import time
 import sys
-from sty import fg, bg, ef, rs
+import queue
+from sty import fg, rs
+
+if len(sys.argv) < 4:
+    print("** FTP Variant **")
+    print("Usage: python3 client.py [host] [port] [download_path]")
+    sys.exit(-1)
+
+
+DOWNLOAD_PATH = sys.argv[3]
+if not os.path.exists(DOWNLOAD_PATH):
+    print("{} does not exists".format(DOWNLOAD_PATH))
+    sys.exit(-1)
 
 logging.basicConfig(level=logging.INFO)
 
-
-def random_color():
-    colors = [fg.li_blue, fg.li_cyan, fg.li_green, fg.li_magenta, fg.li_red,
-              fg.li_white, fg.li_yellow]
-    return random.choice(colors)
-
-HOST = '127.0.0.1'
-PORT = 20
+HOST = sys.argv[1]
+PORT = int(sys.argv[2])
 
 ADDRESS = (HOST, PORT)
 
-p1 = random.randint(30, 50)
-p2 = random.randint(96, 128)
-p1_256_p2 = p1 * 256 + p2
+count = 0
+max_count = 0
 
-logging.debug("P1:{}, P2:{}, P1*256 + P2:{}".format(p1, p2, p1_256_p2))
+COUNT_LOCK = threading.Lock()
+COUNT_TO_MAXCOUNT = threading.Condition()
 
-is_file_incoming = False
-filename = None
-file_size = None
 
-FILE_SIZE_LOCK = threading.Lock()
-DATA_HANDLED_LOCK = threading.Lock()
+MSG_QUEUE = queue.Queue()
+threads_loc = {}
+_x = 0
+_y = 0
+
+
+def print_there(x, y, text):
+    sys.stdout.write("\x1b7\x1b[%d;%df%s\x1b8" % (x, y, text))
+    sys.stdout.flush()
+
+
+def save_cur_pos():
+    sys.stdout.write("\x1bs")
+
+
+def rest_cur_pos():
+    sys.stdout.write("\x1bu")
+
+
+class ProgressRenderingThread(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.daemon = True
+
+    def run(self):
+        global threads_loc
+        global _x, _y
+        while True:
+
+            tid, filename = MSG_QUEUE.get()
+
+            if tid not in threads_loc.keys():
+                _x += 1
+                threads_loc[tid] = (_x, _y)
+                print_there(threads_loc[tid][0], threads_loc[tid][1], filename)
+                threads_loc[tid] = (threads_loc[tid][0],
+                                    threads_loc[tid][1] + len(filename) + 1)
+            else:
+                threads_loc[tid] = (threads_loc[tid][0],
+                                    threads_loc[tid][1] + 1)
+            # print(progress)
+            print_there(threads_loc[tid][0], threads_loc[tid][1],
+                        fg.li_green + "◼" + fg.rs)
+            MSG_QUEUE.task_done()
 
 
 def abk_sendmsg(sock, msg):
@@ -40,9 +85,10 @@ def abk_sendmsg(sock, msg):
         modded_msg = modded_msg.decode()
         modded_msg = modded_msg.ljust(256, chr(0))  # padd with \0 upto 256 len
         modded_msg = modded_msg.encode()
-    else:
-        modded_msg = modded_msg.ljust(256, chr(0)) 
+    elif type(modded_msg) == str:
+        modded_msg = modded_msg.ljust(256, chr(0))
     sock.sendall(modded_msg)
+
 
 def abk_recvmsg(sock):
     length = 256
@@ -56,87 +102,87 @@ def abk_recvmsg(sock):
             return msg
     return msg
 
+
 class HandleClientDataThread(threading.Thread):
-    def __init__(self):
+    def __init__(self, is_file_incoming=False, filename=None):
         threading.Thread.__init__(self)
         self.daemon = True
+
         self.logger = logging.getLogger("HandleClientDataThread")
-        self.file_size = 0
-        self.is_file_incoming = False
+
+        self.filename = filename
+        self.file_size = None
+        self.is_file_incoming = is_file_incoming
+
+        self.port = random.randint(10000, 15000)
 
     def run(self):
-        global is_file_incoming
-        global file_size
-        global FILE_SIZE_LOCK
-        global DATA_HANDLED_LOCK
-        global filename
-        
+        global count
+        global max_count
+        global COUNT_LOCK
+        global COUNT_TO_MAXCOUNT
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind((HOST, p1_256_p2))
+            s.bind((HOST, self.port))
             s.listen()
 
+            conn, _addr = s.accept()
+            self.logger.debug("Data Handled Lock Acquired")
+
+            if self.is_file_incoming:
+                self.file_size = abk_recvmsg(conn).decode().strip("\r\n\x00")
+                self.logger.debug("File Size: {}".format(self.file_size))
+                self.file_size = int(self.file_size)
+
+            content = ""
+            recieved = 0
+            old_progress = 0
             while True:
-                conn, addr = s.accept()
-                DATA_HANDLED_LOCK.acquire()
-                self.logger.debug("Data Handled Lock Acquired")
+                if self.is_file_incoming:
+                    if type(content) == str:
+                        content = bytes()
+                    response = abk_recvmsg(conn)
+                    if not response:
+                        break
+                    content = content + response
+                    recieved += len(response)
+                    progress = int(100 * (recieved / self.file_size))
+                    if progress > old_progress:
+                        MSG_QUEUE.put(
+                            (threading.get_ident(), self.filename))
+                        old_progress = progress
+                    if self.file_size - recieved == 0:
+                        f = open(os.path.join(os.path.abspath(
+                            DOWNLOAD_PATH), self.filename), "wb")
+                        f.write(content)
+                        f.close()
+                        break
+                    time.sleep(0.0005)
+                    # print(self.file_size - recieved)
+                else:
+                    response = abk_recvmsg(conn)
+                    if not response:
+                        break
+                    content = content + response.decode()
+            print()
+            if not self.is_file_incoming:
+                print(content)
 
-                # print("FTP Server link with me on data port")
-                
-
-                if is_file_incoming:
-                    with FILE_SIZE_LOCK:
-                        self.file_size = file_size
-                        self.logger.debug("FILE SIZE lock acquired")
-                        self.logger.debug("File Size: {}".format(file_size))
-                    self.logger.debug("FILE Size lock released")
-                content = ""
-                recieved = 0
-                old_progress = 0
-                if is_file_incoming:
-                    print("Progress: ", end='')
-
-                while True:                    
-                    if is_file_incoming:
-                        if type(content) == str:
-                            content = bytes()
-                        response = abk_recvmsg(conn)
-                        if not response:
-                            break
-                        content = content + response
-                        recieved += len(response)
-                        progress = int(100 * (recieved / file_size))
-                        if progress > old_progress:
-                            if progress % 2 == 0:
-                                print(fg.li_green + "◼" + fg.rs, end="")
-                            else:
-                                print("", end="")
-                            sys.stdout.flush()
-
-                            old_progress = progress
-
-                        if file_size - recieved == 0:
-                            f = open("/home/bilal/Desktop/" + filename, "wb")
-                            f.write(content)
-                            f.close()
-                            break
-                        # time.sleep(0.005)
-                    else:
-                        response = abk_recvmsg(conn)
-                        if not response:
-                            break
-                        content = content + response.decode()
-                print()
-                if not is_file_incoming:
-                    print(content)
-                DATA_HANDLED_LOCK.release()
-                self.logger.debug("Data Handled Lock Released")
+            with COUNT_LOCK:
+                count += 1
+                if count == max_count:
+                    COUNT_TO_MAXCOUNT.acquire()
+                    COUNT_TO_MAXCOUNT.notify_all()
+                    COUNT_TO_MAXCOUNT.release()
+                    self.logger.debug("COUNT_TO_MAX notified")
+            self.logger.debug("COUNT Locked released")
 
 
-def send_port(s, cmd, host, p1, p2):
+def send_port(s, cmd, host, port):
     new_cmd = 'PORT'
-    new_command = "{cmd} {host},{p1},{p2}".format(cmd=new_cmd,
-                                                  host=HOST.replace(".", ","),
-                                                  p1=p1, p2=p2)
+    new_command = "{cmd} {host} {port}".format(cmd=new_cmd,
+                                               host=host,
+                                               port=port)
     new_command = new_command.encode()
     s.sendall(new_command)
     response = abk_recvmsg(s).decode()  # recv PORT's response
@@ -144,16 +190,13 @@ def send_port(s, cmd, host, p1, p2):
 
 
 def main():
+    ProgressRenderingThread().start()
+
+    global count
+    global max_count
+    global COUNT_LOCK
+    global COUNT_TO_MAXCOUNT
     main_logger = logging.getLogger("MAIN")
-
-    global is_file_incoming
-    global file_size
-    global FILE_SIZE_LOCK
-    global DATA_HANDLED_LOCK
-    global filename
-
-    HandleClientDataThread().start()
-
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect(ADDRESS)
@@ -161,8 +204,12 @@ def main():
         print(fg.li_blue + response + fg.rs)
 
         while True:
+            max_count = 0
+            count = 0
             command = input(fg.green + ">> " + fg.rs)
             command = command.split()
+            if len(command) == 0:
+                continue
             command[0] = command[0].upper()
             command = " ".join(command)
 
@@ -173,38 +220,44 @@ def main():
             args = splitted_command[1:]
 
             well_formed_command = False
-            
-            if cmd == 'USER' and args and args[0]:
+
+            if cmd == 'USER' and args and len(args) == 1:
                 well_formed_command = True
-            
+
             elif cmd == 'PWD':
                 well_formed_command = True
-            
+
             elif cmd == 'SYST':
                 well_formed_command = True
-            
-            elif cmd == 'CWD':
-                if args and len(args) == 1:
-                    well_formed_command = True
-            
+
+            elif cmd == 'CWD' and args and len(args) == 1:
+                well_formed_command = True
+
             elif cmd == 'QUIT' and not args:
                 well_formed_command = True
 
             elif cmd == 'LIST':
-                send_port(s, cmd, HOST, p1, p2)
+                t = HandleClientDataThread()
+                t.start()
+                send_port(s, cmd, HOST, t.port)
                 well_formed_command = True
 
-            elif cmd == 'RETR' and args and len(args) == 1:
-                is_file_incoming = True
-                FILE_SIZE_LOCK.acquire()
-                main_logger.debug("FILE Size lock acquired")
-
-                send_port(s, cmd, HOST, p1, p2)
+            elif cmd == 'RETR' and args:
+                threads = []
+                for filename in args:
+                    threads.append(HandleClientDataThread(
+                        is_file_incoming=True, filename=filename)
+                    )
+                    max_count += 1
+                os.system("clear")
+                for t in threads:
+                    t.start()
+                    send_port(s, cmd, HOST, t.port)
+                main_logger.info("Max Count {}".format(max_count))
                 well_formed_command = True
 
             elif cmd == 'SIZE' and args and len(args) == 1:
                 well_formed_command = True
-
 
             if well_formed_command:
                 s.sendall(command)
@@ -214,28 +267,25 @@ def main():
                 if cmd == 'QUIT':
                     s.close()
                     return 0
-                elif cmd == 'LIST':
+                elif cmd == 'LIST' and response[:3] != '530':
                     response = abk_recvmsg(s).decode()
                     print(response)
-                elif cmd == 'RETR':
-                    file_size = int(abk_recvmsg(s).decode().strip("\r\n\x00"))
-                    filename = args[0]
-                    print("File Size", file_size)
-                    FILE_SIZE_LOCK.release()
-                    main_logger.debug("FILE Size lock released")
-                    response = abk_recvmsg(s).decode()
-                    
-                    with DATA_HANDLED_LOCK:
-                        main_logger.debug("Acquired DATA Handled Lock")
+
+                elif cmd == 'RETR' and response[:3] != '530':
+                    COUNT_TO_MAXCOUNT.acquire()
+                    main_logger.debug("Waiting for COUNT_TO_MAX")
+
+                    COUNT_TO_MAXCOUNT.wait()
+
+                    main_logger.debug("Wait Ended for COUNT_TO_MAX")
+                    for _i in range(max_count):
+                        response = abk_recvmsg(s).decode()
                         print(response)
-                        file_size = None
-                        is_file_incoming = False
-                        filename = None
-                    main_logger.debug("Released DATA Handled Lock")
-
-
-                elif cmd == 'SIZE':
+                    threads_loc.clear()
+                    COUNT_TO_MAXCOUNT.release()
+                elif cmd == 'SIZE' and response[:3] != '530':
                     file_size = abk_recvmsg(s).decode()
-                    print("File Size:",file_size)
-            
+                    print("File Size:", file_size)
+
+
 main()
