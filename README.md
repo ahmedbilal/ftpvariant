@@ -42,6 +42,12 @@ To run the client enter the following command on your terminal.
 *[host] is the ip address of machine on which the FTP server is running and [port] is the port of that server on which it
 is listening. Port is the same you entered above when running the server*
 
+**You can only login as anonymous user without any password at the moment. So, after connecting with server your first
+command should be**
+```ftp
+   USER anonymous
+```
+
 ## Contribution
 I am happy to incorporate any contribution in this project. Just make sure your code is formatted according to PEP8 conventions.
 
