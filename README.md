@@ -21,7 +21,7 @@ The easiest way is to clone/download the repository. Run the following commands 
    cd ftpvariant
 ```
 ```bash
-   pip -r requirements.txt
+   pip install -r requirements.txt
 ```
 and you are **done**
 
