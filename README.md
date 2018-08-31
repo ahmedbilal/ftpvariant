@@ -8,11 +8,20 @@ compliant FTP but have changed a lot so it may be not a fully compliant FTP now.
 
 ![screen record](https://image.ibb.co/mxkwxp/Peek_2018_08_31_10_24.gif)
 
+## Dependencies
+1. [Sty (For Colored Output)](https://pypi.org/project/sty/)
+
 ## Installation
-The easiest way is to clone/download the repository. Run the following command on your terminal to clone the repository.
+The easiest way is to clone/download the repository. Run the following commands on your terminal to clone the repository.
 
 ```bash
    git clone https://github.com/ahmedbilal/ftpvariant.git
+```
+```bash
+   cd ftpvariant
+```
+```bash
+   pip -r requirements.txt
 ```
 and you are **done**
 
