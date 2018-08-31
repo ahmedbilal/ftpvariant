@@ -1,9 +1,16 @@
 import socket
 import threading
 import os
+import sys
 
 HOST = '127.0.0.1'
-PORT = 24
+
+if len(sys.argv) < 2:
+    print("** FTP Variant **")
+    print("Usage: sudo python3 server.py [port]")
+    sys.exit(-1)
+
+PORT = int(sys.argv[1])
 
 ADDRESS = (HOST, PORT)
 

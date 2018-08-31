@@ -8,10 +8,21 @@ import sys
 import queue
 from sty import fg, rs
 
+if len(sys.argv) < 4:
+    print("** FTP Variant **")
+    print("Usage: python3 client.py [host] [port] [download_path]")
+    sys.exit(-1)
+
+
+DOWNLOAD_PATH = sys.argv[3]
+if not os.path.exists(DOWNLOAD_PATH):
+    print("{} does not exists".format(DOWNLOAD_PATH))
+    sys.exit(-1)
+
 logging.basicConfig(level=logging.INFO)
 
-HOST = '127.0.0.1'
-PORT = 24
+HOST = sys.argv[1]
+PORT = int(sys.argv[2])
 
 ADDRESS = (HOST, PORT)
 
@@ -141,7 +152,8 @@ class HandleClientDataThread(threading.Thread):
                             (threading.get_ident(), self.filename))
                         old_progress = progress
                     if self.file_size - recieved == 0:
-                        f = open("/home/bilal/Desktop/" + self.filename, "wb")
+                        f = open(os.path.join(os.path.abspath(
+                            DOWNLOAD_PATH), self.filename), "wb")
                         f.write(content)
                         f.close()
                         break
