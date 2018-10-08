@@ -5,8 +5,7 @@ It is written in Python3 and is less than 500 lines of code and easy to modify.
 This ftp variant supports only **USER**,
 **PWD**, **SYST**, **CWD**, **QUIT**, **LIST**, **RETR**, and **SIZE** command at the moment. Although it is born as fully
 compliant FTP but have changed a lot so it may be not a fully compliant FTP now.
-
-![screen record](https://image.ibb.co/mxkwxp/Peek_2018_08_31_10_24.gif)
+![screen record](https://thumb.ibb.co/gpyOip/screen_record.gif)
 
 ## Dependencies
 1. [Sty (For Colored Output)](https://pypi.org/project/sty/)
