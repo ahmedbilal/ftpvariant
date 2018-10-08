@@ -28,7 +28,7 @@ if not os.path.exists(DOWNLOAD_PATH):
     print("{} does not exists".format(DOWNLOAD_PATH))
     sys.exit(-1)
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.CRITICAL)
 
 HOST = sys.argv[1]
 PORT = int(sys.argv[2])
@@ -42,23 +42,7 @@ COUNT_LOCK = threading.Lock()
 COUNT_TO_MAXCOUNT = threading.Condition()
 
 
-MSG_QUEUE = queue.Queue()
-THREADS_LOC = {}
-_x = 0
-_y = 0
-
-
-def print_there(x, y, text):
-    sys.stdout.write("\x1b7\x1b[%d;%df%s\x1b8" % (x, y, text))
-    sys.stdout.flush()
-
-
-def save_cur_pos():
-    sys.stdout.write("\x1bs")
-
-
-def rest_cur_pos():
-    sys.stdout.write("\x1bu")
+MSG_QUEUE = {}
 
 
 class ProgressRenderingThread(threading.Thread):
@@ -67,32 +51,31 @@ class ProgressRenderingThread(threading.Thread):
         self.daemon = True
 
     def run(self):
-        global THREADS_LOC
-        global _x, _y
+        max_keys = 0
         while True:
+            keys = list(MSG_QUEUE.keys())
+            max_keys = max(max_keys, len(keys))
+            if len(keys) == 0:
+                sys.stdout.write("\u001b[" + str(max_keys) + "B")  # Move Down
+                return
+            for tid in keys:
+                _tid = MSG_QUEUE.get(tid)
+                if not _tid:
+                    return
+                filename, progress = _tid
 
-            tid, filename = MSG_QUEUE.get()
+                print(filename + ": " + fg.li_green + "◼" * progress + fg.rs +
+                      " " + str(progress * 2))
 
-            if tid not in THREADS_LOC.keys():
-                _x += 1
-                THREADS_LOC[tid] = (_x, _y)
-                print_there(THREADS_LOC[tid][0], THREADS_LOC[tid][1], filename)
-                THREADS_LOC[tid] = (THREADS_LOC[tid][0],
-                                    THREADS_LOC[tid][1] + len(filename) + 1)
-            else:
-                THREADS_LOC[tid] = (THREADS_LOC[tid][0],
-                                    THREADS_LOC[tid][1] + 1)
-            # print(progress)
-            print_there(THREADS_LOC[tid][0], THREADS_LOC[tid][1],
-                        fg.li_green + "◼" + fg.rs)
-            MSG_QUEUE.task_done()
+            sys.stdout.write("\u001b[" + str(len(keys)) + "A")  # Move UP
 
 
 class HandleClientDataThread(threading.Thread):
     def __init__(self, is_file_incoming=False, filename=None):
+        global MSG_QUEUE
+
         threading.Thread.__init__(self)
         self.daemon = True
-
         self.logger = logging.getLogger("HandleClientDataThread")
 
         self.filename = filename
@@ -106,6 +89,9 @@ class HandleClientDataThread(threading.Thread):
         global MAX_COUNT
         global COUNT_LOCK
         global COUNT_TO_MAXCOUNT
+        global MSG_QUEUE
+
+        MSG_QUEUE[str(threading.get_ident())] = self.filename, 0
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind((HOST, self.port))
@@ -122,19 +108,21 @@ class HandleClientDataThread(threading.Thread):
             content = ""
             recieved = 0
             old_progress = 0
+
             while True:
                 if self.is_file_incoming:
+
                     if isinstance(content, str):
                         content = bytes()
-                    response = abk_recvmsg(conn)
+                    response = conn.recv(65536)
                     if not response:
                         break
                     content = content + response
                     recieved += len(response)
                     progress = int(100 * (recieved / self.file_size))
                     if progress > old_progress:
-                        MSG_QUEUE.put(
-                            (threading.get_ident(), self.filename))
+                        if progress:
+                            MSG_QUEUE[str(threading.get_ident())] = self.filename, progress//2
                         old_progress = progress
                     if self.file_size - recieved == 0:
                         f = open(os.path.join(os.path.abspath(
@@ -142,14 +130,13 @@ class HandleClientDataThread(threading.Thread):
                         f.write(content)
                         f.close()
                         break
-                    time.sleep(0.0005)
                     # print(self.file_size - recieved)
                 else:
-                    response = abk_recvmsg(conn)
+                    response = conn.recv(65536)
                     if not response:
                         break
                     content = content + response.decode()
-            print()
+
             if not self.is_file_incoming:
                 print(content)
 
@@ -175,7 +162,6 @@ def send_port(s, cmd, host, port):
 
 
 def main():
-    ProgressRenderingThread().start()
 
     global COUNT
     global MAX_COUNT
@@ -189,6 +175,8 @@ def main():
         print(fg.li_blue + response + fg.rs)
 
         while True:
+            # sys.stdout.write("\u001b[1000C \n")
+            print("\r\n")
             MAX_COUNT = 0
             COUNT = 0
             command = input(fg.green + ">> " + fg.rs)
@@ -232,8 +220,9 @@ def main():
                 for filename in args:
                     threads.append(HandleClientDataThread(
                         is_file_incoming=True, filename=filename))
+
                     MAX_COUNT += 1
-                os.system("clear")
+                # os.system("clear")
                 for thread in threads:
                     thread.start()
                     send_port(s, cmd, HOST, thread.port)
@@ -246,7 +235,7 @@ def main():
             if well_formed_command:
                 s.sendall(command)
                 response = abk_recvmsg(s).decode()
-                print("SERVER RESPONSE:", response)
+                print("SERVER RESPONSE:", response.strip())
 
                 if cmd == 'QUIT':
                     s.close()
@@ -256,17 +245,20 @@ def main():
                     print(response)
 
                 elif cmd == 'RETR' and response[:3] != '530':
+                    prt = ProgressRenderingThread()
+                    prt.start()
+
                     COUNT_TO_MAXCOUNT.acquire()
                     main_logger.debug("Waiting for COUNT_TO_MAX")
 
                     COUNT_TO_MAXCOUNT.wait()
-
+                    MSG_QUEUE.clear()
+                    prt.join()
                     main_logger.debug("Wait Ended for COUNT_TO_MAX")
                     for _i in range(MAX_COUNT):
                         response = abk_recvmsg(s).decode()
-                        print(response)
-                    THREADS_LOC.clear()
-                    COUNT_TO_MAXCOUNT.release()
+
+                    COUNT_TO_MAXCOUNT.release()               
                 elif cmd == 'SIZE' and response[:3] != '530':
                     file_size = abk_recvmsg(s).decode()
                     print("File Size:", file_size)
